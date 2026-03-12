@@ -12,9 +12,10 @@ body { background: #e9f1ff; }
 .header-box{
     display:flex;
     justify-content:space-between;
-    align-items:center;
+    align-items:flex-start;
     margin-bottom:15px;
     flex-wrap: wrap;
+    gap:10px;
 }
 .search-box{ display:flex; gap:10px; margin-top:10px; }
 .status-approved{ color:green; font-weight:600; }
@@ -24,6 +25,9 @@ body { background: #e9f1ff; }
 .web-time{
     font-weight:600;
     color:#0d6efd;
+}
+.count-box{
+    min-width:260px;
 }
 </style>
 
@@ -80,6 +84,101 @@ function takeAction(enroll, action, rowId){
 
     filterGuardAction(currentFilter);
 }
+
+
+/* =================================================
+   DATE WISE GUARD COUNT
+   - Date filter
+   - Today default
+   - Format mismatch fix
+   ================================================= */
+
+function normalizeDate(val){
+    if(!val) return val;
+
+    // yyyy-mm-dd -> keep
+    if(val.length === 10 && val[4] === '-') return val;
+
+    // dd-mm-yyyy -> convert
+    let p = val.split("-");
+    if(p.length === 3 && p[0].length === 2){
+        return p[2] + "-" + p[1] + "-" + p[0];
+    }
+    return val;
+}
+
+function loadGuardDateCounts(){
+
+    let selectedDate = document.getElementById("guardCountDate").value;
+    selectedDate = normalizeDate(selectedDate);
+
+    fetch("/guard_datewise_counts")
+    .then(res => res.json())
+    .then(data => {
+
+        let rows = data.data || [];
+
+        if(selectedDate){
+            rows = rows.filter(r => r.date === selectedDate);
+        }
+
+        let html = `
+        <div class="card p-3">
+            <h5>Guard Grant / Deny – Date Wise</h5>
+            <table class="table table-bordered text-center mt-2">
+                <thead class="table-primary">
+                    <tr>
+                        <th>Date</th>
+                        <th>Grant</th>
+                        <th>Deny</th>
+                    </tr>
+                </thead>
+                <tbody>
+        `;
+
+        if(rows.length === 0){
+            html += `
+                <tr>
+                    <td colspan="3">No data found</td>
+                </tr>
+            `;
+        }else{
+            rows.forEach(r => {
+                html += `
+                    <tr>
+                        <td>${r.date}</td>
+                        <td>${r.grant}</td>
+                        <td>${r.deny}</td>
+                    </tr>
+                `;
+            });
+        }
+
+        html += `
+                </tbody>
+            </table>
+        </div>
+        `;
+
+        document.getElementById("guardCountBox").innerHTML = html;
+    });
+}
+
+
+document.addEventListener("DOMContentLoaded", function(){
+
+    let d = new Date();
+    let m = String(d.getMonth()+1).padStart(2,'0');
+    let da = String(d.getDate()).padStart(2,'0');
+    let today = d.getFullYear()+"-"+m+"-"+da;
+
+    let input = document.getElementById("guardCountDate");
+    if(input){
+        input.value = today;
+    }
+
+    loadGuardDateCounts();
+});
 </script>
 </head>
 
@@ -87,6 +186,7 @@ function takeAction(enroll, action, rowId){
 <div class="container py-4">
 
 <div class="header-box">
+
     <div>
         <h3>📋 Warden Summary</h3>
         <div class="web-time">
@@ -99,6 +199,19 @@ function takeAction(enroll, action, rowId){
         <button class="btn btn-danger btn-lg" style="width:120px;" onclick="filterGuardAction('Deny')">Denied</button>
         <button class="btn btn-warning btn-lg" style="width:120px;" onclick="filterGuardAction('Pending')">Pending</button>
         <button class="btn btn-primary btn-lg" style="width:120px;" onclick="filterGuardAction('All')">All</button>
+    </div>
+
+    <!-- Guard count controls -->
+    <div class="count-box">
+        <button class="btn btn-dark btn-lg w-100"
+                onclick="loadGuardDateCounts()">
+            📊 Guard Date-Wise Count
+        </button>
+
+        <input type="date"
+               id="guardCountDate"
+               class="form-control mt-2"
+               onchange="loadGuardDateCounts()">
     </div>
 
     <form method="GET" action="/warden_summary" class="search-box">
@@ -117,6 +230,9 @@ function takeAction(enroll, action, rowId){
     </form>
 
 </div>
+
+<!-- Result -->
+<div id="guardCountBox" class="mb-3"></div>
 
 <table class="table table-bordered text-center">
 <thead>
@@ -169,7 +285,6 @@ function takeAction(enroll, action, rowId){
         {% endif %}
     </td>
 
-    <!-- ✅ ONLY CHANGED PART -->
     <td id="guard_action_{{loop.index}}">
         {{ r.guard_status if r.guard_status else '-' }}
     </td>

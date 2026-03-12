@@ -6,42 +6,21 @@ import time
 import os
 import random
 import pandas as pd
-import requests
-from datetime import timedelta, datetime
-from datetime import datetime as real_datetime
-import secrets
 
 app = Flask(__name__)
 app.secret_key = "super_secret_key_123"
 
+import os
+
 DB_PATH = 'Database.db'
 DATA_PATH = 'Dataset.csv.xlsx'
 
-@app.route("/login", methods=["POST","GET"])
-def login():
 
-    username = request.form["username"]
-    password = request.form["password"]
 
-    if username == "admin" and password == "admin":
+import requests
+from datetime import timedelta, datetime
+from datetime import datetime as real_datetime
 
-        # TOKEN GENERATE
-        token = secrets.token_hex(16)
-
-        # SESSION मध्ये STORE
-        session["user"] = username
-        session["token"] = token
-
-        return redirect("/dashboard")
-
-    return "Invalid Login"
-
-def check_token():
-
-    if "token" not in session:
-        return False
-
-    return True
 
 
 def get_web_time():
@@ -2380,11 +2359,9 @@ def mark(action, enroll):
 def add_student():
     return render_template("add_new_student.html")
 
+
 @app.route("/dashboard")
 def dashboard():
-
-    if not check_token():
-        return redirect("/login")
 
     # 🔹 1. calendar & search input घ्या
     selected_date = request.args.get("date")
@@ -2542,7 +2519,7 @@ def save_student_camera():
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute("""
-        CREATE TABLE IF NOT EXIST Students (
+        CREATE TABLE IF NOT EXISTS Students (
             enrollment TEXT PRIMARY KEY,
             name TEXT,
             department TEXT,
