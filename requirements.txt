@@ -13,3 +13,4 @@ openpyxl
 opencv-python-headless
 pillow
 deepface
+tf-keras
