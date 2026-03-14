@@ -1857,7 +1857,6 @@ def check_status():
     </html>
     """
     return render_template_string(html, results=results, enroll=enroll)
-
 #============================================================
 # COLLEGE ENTRY EXIT SYSTEM (HIGH ACCURACY – FACE RECOGNITION)
 # ============================================================
@@ -1870,18 +1869,16 @@ import base64
 import cv2
 import numpy as np
 import sqlite3
-import face_recognition
+from deepface import DeepFace
 from flask import Flask, request, jsonify, render_template
 from datetime import datetime
-
-# ---------------- APP ----------------
 
 
 # ---------------- PATHS ----------------
 DATA_PATH = "Dataset.csv.xlsx"
 IMAGE_DIR = "static/images"
-
 STUDENT_IMAGE_DIR = "student_images"
+DB_PATH = "college.db"
 
 # ---------------- DATABASE ----------------
 def init_db():
@@ -1928,19 +1925,21 @@ init_db()
 df = pd.read_excel(DATA_PATH)
 df.columns = [c.strip().upper().replace(" ", "_") for c in df.columns]
 
-
 # ---------------- FACE ENCODING ----------------
 def get_face_encoding(img):
-    rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    boxes = face_recognition.face_locations(rgb, model="hog")
+    try:
+        embedding = DeepFace.represent(
+            img_path=img,
+            model_name="Facenet",
+            enforce_detection=True
+        )[0]["embedding"]
 
-    if len(boxes) != 1:
+        return np.array(embedding)
+
+    except:
         return None
 
-    return face_recognition.face_encodings(rgb, boxes)[0]
-
-
-# ---------------- load new student faces----------------
+# ---------------- LOAD STUDENT FACES ----------------
 def load_known_faces():
     global known_encodings, known_enrollments
 
@@ -1954,58 +1953,43 @@ def load_known_faces():
 
         for img_name in os.listdir(IMAGE_DIR):
             if img_name.startswith(enroll):
+
                 img = cv2.imread(os.path.join(IMAGE_DIR, img_name))
+
                 if img is None:
                     continue
 
                 enc = get_face_encoding(img)
+
                 if enc is not None:
                     known_encodings.append(enc)
                     known_enrollments.append(enroll)
 
     print(f"✅ Loaded {len(known_encodings)} face encodings")
 
-
-# ---------------- LOAD STUDENT FACES ----------------
 known_encodings = []
 known_enrollments = []
 
 load_known_faces()
 
-
-# print("🔄 Loading student faces...")
-
-# for _, row in df.iterrows():
-#     enroll = str(row["ENROLLMENT_NO"])
-
-#     for img_name in os.listdir(IMAGE_DIR):
-#         if img_name.startswith(enroll):
-#             img = cv2.imread(os.path.join(IMAGE_DIR, img_name))
-#             if img is None:
-#                 continue
-
-#             enc = get_face_encoding(img)
-#             if enc is not None:
-#                 known_encodings.append(enc)
-#                 known_enrollments.append(enroll)
-
-# print(f"✅ Loaded {len(known_encodings)} face samples")
-
-
 # ---------------- FACE MATCH ----------------
-def match_face_live(live_encoding, tolerance=0.45):
-    matches = face_recognition.compare_faces(
-        known_encodings, live_encoding, tolerance
-    )
+def match_face_live(live_encoding, threshold=0.6):
 
-    if True not in matches:
-        return None
+    best_match = None
+    best_distance = 999
 
-    distances = face_recognition.face_distance(
-        known_encodings, live_encoding
-    )
+    for i, known_enc in enumerate(known_encodings):
 
-    return known_enrollments[np.argmin(distances)]
+        dist = np.linalg.norm(known_enc - live_encoding)
+
+        if dist < best_distance:
+            best_distance = dist
+            best_match = known_enrollments[i]
+
+    if best_distance < threshold:
+        return best_match
+
+    return None
 
 # ---------------- ROUTES ----------------
 @app.route("/entryexit")
@@ -2019,6 +2003,7 @@ def verify1():
         return render_template("error.html", msg="❌ No image received")
 
     file = request.files["frame"]
+
     if file.filename == "":
         return render_template("error.html", msg="❌ No image selected")
 
@@ -2027,12 +2012,14 @@ def verify1():
     )
 
     live_enc = get_face_encoding(img)
+
     if live_enc is None:
         return render_template(
             "error.html", msg="❌ Exactly ONE face required"
         )
 
     enroll = match_face_live(live_enc)
+
     if enroll is None:
         return render_template(
             "error.html", msg="❌ Student not registered"
@@ -2050,7 +2037,9 @@ def verify1():
 
 @app.route("/mark/<action>/<enroll>")
 def mark(action, enroll):
+
     ts = datetime.now().strftime("%d-%m-%Y %I:%M %p")
+
     s = df[df["ENROLLMENT_NO"].astype(str) == enroll].iloc[0]
 
     con = sqlite3.connect(DB_PATH)
@@ -2090,33 +2079,29 @@ def mark(action, enroll):
 def add_student():
     return render_template("add_new_student.html")
 
-
 @app.route("/dashboard")
 def dashboard():
 
-    # 🔹 1. calendar & search input घ्या
     selected_date = request.args.get("date")
     search = request.args.get("search", "").strip()
 
     con = sqlite3.connect(DB_PATH)
     con.row_factory = sqlite3.Row
 
-    # 🔹 2. base query
     query = """
     SELECT g.*, s.current_status
     FROM GateLogs g
     LEFT JOIN Status s ON g.enrollment = s.enrollment
     WHERE 1=1
     """
+
     params = []
 
-    # 🔹 3. date filter (calendar)
     if selected_date:
         d = datetime.strptime(selected_date, "%Y-%m-%d").strftime("%d-%m-%Y")
         query += " AND g.timestamp LIKE ?"
         params.append(f"{d}%")
 
-    # 🔹 4. student search (name / enrollment / phone)
     if search:
         query += """
         AND (
@@ -2125,6 +2110,7 @@ def dashboard():
             OR g.phone LIKE ?
         )
         """
+
         params.extend([
             f"%{search}%",
             f"%{search}%",
@@ -2144,6 +2130,7 @@ def dashboard():
 
 @app.route('/student/<enroll>')
 def student_info(enroll):
+
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
@@ -2151,6 +2138,7 @@ def student_info(enroll):
         "SELECT name, department, year FROM Students WHERE enrollment=?",
         (enroll,)
     )
+
     student = cursor.fetchone()
 
     conn.close()
@@ -2160,7 +2148,6 @@ def student_info(enroll):
 
     name, dept, year = student
 
-    # student photos path
     image_folder = f"static/dataset/{enroll}"
     images = []
 
@@ -2175,9 +2162,12 @@ def student_info(enroll):
         images=images,
         enroll=enroll
     )
+
 @app.route("/save_student_camera", methods=["POST"])
 def save_student_camera():
+
     try:
+
         os.makedirs(STUDENT_IMAGE_DIR, exist_ok=True)
 
         data = request.json
@@ -2201,10 +2191,13 @@ def save_student_camera():
         encodings_list = []
 
         for i, img_data in enumerate(images):
+
             header, encoded = img_data.split(",", 1)
+
             img_bytes = base64.b64decode(encoded)
 
             img_array = np.frombuffer(img_bytes, np.uint8)
+
             img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
 
             if img is None:
@@ -2213,13 +2206,10 @@ def save_student_camera():
             img_path = os.path.join(student_folder, f"{enroll}_{i+1}.jpg")
             cv2.imwrite(img_path, img)
 
-            rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            enc = face_recognition.face_encodings(rgb)
+            enc = get_face_encoding(img)
 
-            if enc:
-                encodings_list.append(enc[0])
-            else:
-                print("❌ No face detected in one image")
+            if enc is not None:
+                encodings_list.append(enc)
 
         if len(encodings_list) < 2:
             return jsonify({
@@ -2254,7 +2244,9 @@ def save_student_camera():
         })
 
     except Exception as e:
+
         print("🔥 SAVE STUDENT ERROR:", e)
+
         return jsonify({
             "status":"error",
             "msg":"Server error while saving student"
