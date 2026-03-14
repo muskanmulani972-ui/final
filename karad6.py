@@ -1115,34 +1115,64 @@ def warden_dashboard():
 SENDER_EMAIL = "arunasbamnekar@gmail.com"
 SENDER_PASSWORD = "sslbtzwlvtjqygqj"
 
-# @app.route("/update_status", methods=["POST"])
-# def update_status():
-#     data = request.get_json()
-#     enrollment = data.get("enrollment")
-#     guard_action = data.get("status")   # Grant / Deny
-#     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-#     conn = sqlite3.connect(DB_PATH)
-#     cursor = conn.cursor()
+@app.route('/update_status/<int:req_id>/<status>')
+def update_status_email(req_id, status):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        action_date, action_time = get_web_time()
+        Action_Time = f"{action_date} {action_time}"
 
-#     # Update main table permanently
-#     cursor.execute("""
-#         UPDATE OutpassRequests2
-#         SET guard_status = ?, guard_action_time = ?
-#         WHERE Enrollment_No = ?
-#         ORDER BY id DESC
-#         LIMIT 1
-#     """, (guard_action, now, enrollment))
+        # Update status and time
+        cursor.execute("UPDATE OutpassRequests2 SET Status=?, Action_Time=? WHERE id=?",
+                       (status, Action_Time, req_id))
+        conn.commit()
 
-#     conn.commit()
-#     conn.close()
+        cursor.execute("SELECT Enrollment_No FROM OutpassRequests2 WHERE id=?", (req_id,))
+        row = cursor.fetchone()
+        conn.close()
 
-#     return {
-#         "status": "success",
-#         "msg": "Guard action saved successfully",
-#         "guard_action": guard_action,
-#         "time": now
-#     }
+        if not row:
+            print("Request not found")
+            return redirect(url_for('warden_dashboard'))
+
+        enroll = str(row[0]).strip()
+        df['ENROLLMENT_NO'] = df['ENROLLMENT_NO'].astype(str).str.strip()
+        student = df[df['ENROLLMENT_NO'] == enroll]
+
+        if student.empty:
+            print(f"No student found for {enroll}")
+            return redirect(url_for('warden_dashboard'))
+
+        student_email = str(student.iloc[0].get('EMAIL')).strip()
+        student_name = student.iloc[0].get('NAME', 'Student')
+
+        if not student_email or "@" not in student_email:
+            print("INVALID EMAIL:", student_email)
+            return redirect(url_for('warden_dashboard'))
+
+        # Email sending
+        msg = MIMEMultipart()
+        msg['From'] = SENDER_EMAIL
+        msg['To'] = student_email
+        msg['Subject'] = f"Outpass Request {status}"
+        msg.attach(MIMEText(f"Hello {student_name},\n\nYour outpass request has been {status.lower()}.\n\nRegards,\nWarden", 'plain'))
+
+        # Use same method as working first code
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(SENDER_EMAIL, SENDER_PASSWORD)
+        server.send_message(msg)
+        server.quit()
+
+        print("EMAIL SENT SUCCESSFULLY to", student_email)
+
+    except Exception as e:
+        print("EMAIL ERROR:", e)
+
+    return redirect(url_for('warden_dashboard'))
+
 # -------------------------------
 # UPDATED HTML TEMPLATE
 # -------------------------------
@@ -1644,64 +1674,24 @@ from flask import request, render_template
 
 DB_PATH = 'outpass.db'
 
-# ---------------- DATABASE ----------------
 def init_db():
-    con = sqlite3.connect(DB_PATH)
-    cur = con.cursor()
-
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS GateLogs(
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        enrollment TEXT,
-        name TEXT,
-        department TEXT,
-        year TEXT,
-        phone TEXT,
-        Entry_action TEXT,
-        Exit_action TEXT,
-        entry_time TEXT,
-        exit_time TEXT
-    )
-    """)
-
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS Status(
-        enrollment TEXT PRIMARY KEY,
-        current_status TEXT,
-        last_time TEXT
-    )
-    """)
-
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS Students(
-        enrollment TEXT PRIMARY KEY,
-        name TEXT,
-        department TEXT,
-        year TEXT,
-        phone TEXT
-    )
-    """)
-
-    con.commit()
-    con.close()
-
-init_db()
-
-def ensure_entry_exit_columns():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("PRAGMA table_info(GateLogs)")
-    columns = [col[1] for col in cursor.fetchall()]
 
-    if "Entry_action" not in columns:
-        cursor.execute("ALTER TABLE GateLogs ADD COLUMN Entry_action TEXT")
-    if "Exit_action" not in columns:
-        cursor.execute("ALTER TABLE GateLogs ADD COLUMN Exit_action TEXT")
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS GuardActionsNew (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            enrollment_no TEXT,
+            guard_action TEXT,
+            action_time TEXT
+        )
+    """)
     
     conn.commit()
     conn.close()
 
-ensure_entry_exit_columns()
+init_db()
+
 
 # ====================== UPDATE GUARD ACTION ======================
 @app.route("/update_status", methods=["POST"])
@@ -1744,6 +1734,7 @@ def update_status():
         "guard_action": guard_action,
         "time": now
     }
+
 # ====================== WARDEN SUMMARY ======================
 @app.route("/warden_summary")
 def warden_summary():
@@ -1764,7 +1755,7 @@ def warden_summary():
         placeholders = ",".join("?" for _ in enroll_list)
         cursor.execute(f"""
             SELECT id, Enrollment_No, From_Date, To_Date, Out_Time, In_Time,
-                   Reason, Hostel_Name, Address, Status, guard_status, guard_action_time
+                   Reason, Hostel_Name, Address, Status
             FROM OutpassRequests2
             WHERE Enrollment_No IN ({placeholders})
             ORDER BY id DESC
@@ -1777,7 +1768,7 @@ def warden_summary():
     else:
         cursor.execute("""
             SELECT id, Enrollment_No, From_Date, To_Date, Out_Time, In_Time,
-                   Reason, Hostel_Name, Address, Status, guard_status, guard_action_time
+                   Reason, Hostel_Name, Address, Status
             FROM OutpassRequests2
             ORDER BY id DESC
         """)
@@ -1788,12 +1779,10 @@ def warden_summary():
 
     for r in rows:
 
-        req_id, enroll, from_date, to_date, out_time, in_time, reason, hostel_name, address, status, guard_status, guard_time = r
+        req_id, enroll, from_date, to_date, out_time, in_time, reason, hostel_name, address, status = r
 
-        if not guard_status:
-            guard_status = "-"
-        if not guard_time:
-            guard_time = "-"
+        guard_status = "-"
+        guard_time = "-"
 
         # ---------- Student Info ----------
         student = df[df['ENROLLMENT_NO'].astype(str) == str(enroll)]
@@ -1816,24 +1805,25 @@ def warden_summary():
                 break
 
         # ---------- buttons ----------
-        if status == "Approved" and guard_status == "-":
+        if status == "Pending":
+
             button_html = f"""
-            <button onclick="takeAction('{enroll}','Grant','{req_id}')"
+            <button onclick="performAction('{req_id}','grant')"
                     style="padding:6px 12px;border:none;border-radius:6px;background:#28a745;color:white;">
                 Grant
             </button>
 
-            <button onclick="takeAction('{enroll}','Deny','{req_id}')"
+            <button onclick="performAction('{req_id}','deny')"
                     style="padding:6px 12px;border:none;border-radius:6px;background:#dc3545;color:white;">
                 Deny
             </button>
             """
+
         else:
-            # disable if already taken or not approved
             button_html = f"""
             <button disabled
                     style="padding:6px 12px;border:none;border-radius:6px;background:#6c757d;color:white;">
-                {guard_status if guard_status != "-" else status}
+                {status}
             </button>
             """
 
@@ -1865,7 +1855,7 @@ def warden_summary():
         """
 
         enriched.append({
-            "req_id": req_id,
+            "req_id":req_id,
             "enroll": enroll,
             "card_html": card_html,
             "status": status,
@@ -1880,6 +1870,37 @@ def warden_summary():
         enriched=enriched,
         request=request
     )
+
+@app.route("/guard_datewise_counts")
+def guard_datewise_counts():
+
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            DATE(action_time) AS action_date,
+            SUM(CASE WHEN lower(guard_action)='grant' THEN 1 ELSE 0 END) AS grant_count,
+            SUM(CASE WHEN lower(guard_action)='deny' THEN 1 ELSE 0 END) AS deny_count
+        FROM GuardActionsNew
+        GROUP BY DATE(action_time)
+        ORDER BY action_date DESC
+    """)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    return {
+        "data": [
+            {
+                "date": r[0],
+                "grant": r[1],
+                "deny": r[2]
+            } for r in rows
+        ]
+    }
+
+
 # -------------------------------
 # Route for Request Dashboard INCOMING
 # -------------------------------
@@ -2104,13 +2125,11 @@ def check_status():
 #============================================================
 # COLLEGE ENTRY EXIT SYSTEM (HIGH ACCURACY – FACE RECOGNITION)
 # ============================================================
-
 import mediapipe as mp
 from scipy.spatial import distance as dist
 import threading
 import time
 import pandas as pd
-import random
 import os
 import base64
 import cv2
@@ -2128,10 +2147,6 @@ DATA_PATH = "Dataset.csv.xlsx"
 IMAGE_DIR = "static/images"
 DB_PATH="outpass.db"
 STUDENT_IMAGE_DIR = "static/images"
-
-@app.route("/test")
-def test():
-    return render_template("error.html")
 
 # ---------------- DATABASE ----------------
 def init_db():
@@ -2215,17 +2230,13 @@ def load_known_faces():
 
     print(f"✅ Loaded {len(known_encodings)} face encodings")
 
-# ---------------- RANDOM CHALLENGE ----------------
 
-def generate_challenge():
+# ---------------- LOAD STUDENT FACES ----------------
+known_encodings = []
+known_enrollments = []
 
-    challenges = [
-        "blink",
-        "move_left",
-        "move_right"
-    ]
+load_known_faces()
 
-    return random.choice(challenges)
 
 # ---------------- LIVENESS DETECTION ----------------
 
@@ -2237,9 +2248,6 @@ face_mesh = mp_face.FaceMesh(
 )
 
 prev_nose_x = None
-
-blink_counter = 0
-movement_counter = 0
 
 def eye_aspect_ratio(eye):
 
@@ -2280,7 +2288,7 @@ def detect_liveness(frame):
         movement = abs(nose_x - prev_nose_x)
         prev_nose_x = nose_x
 
-        if movement > 20:   # threshold increase
+        if movement > 15:
             head_move = True
 
     # ---------------- BLINK DETECTION ----------------
@@ -2313,7 +2321,7 @@ def detect_liveness(frame):
 
     blink = False
 
-    if ear < 0.23:   # blink threshold slightly relaxed
+    if ear < 0.21:
         blink = True
 
     # ---------------- FINAL CHECK ----------------
@@ -2322,12 +2330,6 @@ def detect_liveness(frame):
         return True
 
     return False
-# ---------------- LOAD STUDENT FACES ----------------
-known_encodings = []
-known_enrollments = []
-
-load_known_faces()
-
 
 # ---------------- FACE MATCH ----------------
 def match_face_live(live_encoding, tolerance=0.45):
@@ -2344,65 +2346,18 @@ def match_face_live(live_encoding, tolerance=0.45):
 
     return known_enrollments[np.argmin(distances)]
 
-# ---------------- LIVENESS DETECTION ----------------
-
-mp_face = mp.solutions.face_mesh
-face_mesh = mp_face.FaceMesh(
-    static_image_mode=False,
-    max_num_faces=1,
-    refine_landmarks=True
-)
-
-prev_nose_x = None
-
-def detect_liveness(frame):
-
-    global prev_nose_x
-
-    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    results = face_mesh.process(rgb)
-
-    if not results.multi_face_landmarks:
-        return False
-
-    face_landmarks = results.multi_face_landmarks[0]
-
-    nose = face_landmarks.landmark[1]
-
-    h, w, _ = frame.shape
-    nose_x = int(nose.x * w)
-
-    if prev_nose_x is None:
-        prev_nose_x = nose_x
-        return False
-
-    movement = abs(nose_x - prev_nose_x)
-    prev_nose_x = nose_x
-
-    # head movement threshold
-    if movement > 15:
-        return True
-
-    return False
-
 # ---------------- ROUTES ----------------
 @app.route("/entryexit")
 def entryexit():
     return render_template("verify.html")
 
-
 @app.route("/verify1", methods=["POST"])
 def verify1():
-
-    # -------- RANDOM CHALLENGE --------
-    challenge = generate_challenge()
-    print("Challenge:", challenge)
 
     if "frame" not in request.files:
         return render_template("error.html", msg="❌ No image received")
 
     file = request.files["frame"]
-
     if file.filename == "":
         return render_template("error.html", msg="❌ No image selected")
 
@@ -2414,43 +2369,24 @@ def verify1():
 
     if not detect_liveness(img):
         return render_template(
-        "error.html",
-        msg="❌ Liveness check failed. Please move your head."
+            "error.html",
+            msg="❌ Liveness check failed. Please blink or move your head."
     )
 
-    # # ---------- LIVENESS CHECK ----------
-    # global blink_counter, movement_counter
-
-    # live = detect_liveness(img)
-
-    # if blink_counter < 2 or movement_counter < 2:
-    #     return render_template(
-    #         "error.html",
-    #         msg="❌ Liveness check failed. Please blink your eyes and move your head."
-    #     )
-
-    # ---------- FACE ENCODING ----------
     live_enc = get_face_encoding(img)
-
     if live_enc is None:
         return render_template(
-            "error.html",
-            msg="❌ Exactly ONE face required"
+            "error.html", msg="❌ Exactly ONE face required"
         )
 
-    # ---------- FACE MATCH ----------
     enroll = match_face_live(live_enc)
-
     if enroll is None:
         return render_template(
-            "error.html",
-            msg="❌ Student not registered"
+            "error.html", msg="❌ Student not registered"
         )
 
-    # ---------- STUDENT DATA ----------
     s = df[df["ENROLLMENT_NO"].astype(str) == enroll].iloc[0]
 
-    # ---------- SUCCESS ----------
     return render_template(
         "result.html",
         enroll=enroll,
@@ -2459,35 +2395,34 @@ def verify1():
         year=s.YEAR
     )
 
-# -------------------------------------------------------------
 @app.route("/mark/<action>/<enroll>")
-
 def mark(action, enroll):
-    ts = datetime.now().strftime("%d-%m-%Y %I:%M %p")
+    action_date, action_time = get_web_time()
+    ts = f"{action_date} {action_time}"
     s = df[df["ENROLLMENT_NO"].astype(str) == enroll].iloc[0]
 
     con = sqlite3.connect(DB_PATH)
     cur = con.cursor()
 
-    # Entry / Exit store separately
-    if action.upper() == "ENTRY":
-        cur.execute("""
-        INSERT INTO GateLogs (enrollment, name, department, year, phone, Entry_action, timestamp)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (enroll, s.NAME, s.DEPARTMENT, s.YEAR, s.STUDENT_PHONE_NO, "Entry", ts))
+    cur.execute("""
+    INSERT INTO GateLogs 
+    (enrollment, name, department, year, phone, action, timestamp)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (
+        enroll,
+        s.NAME,
+        s.DEPARTMENT,
+        s.YEAR,
+        s.STUDENT_PHONE_NO,
+        action,
+        ts
+    ))
 
-    elif action.upper() == "EXIT":
-        cur.execute("""
-        INSERT INTO GateLogs (enrollment, name, department, year, phone, Exit_action, timestamp)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (enroll, s.NAME, s.DEPARTMENT, s.YEAR, s.STUDENT_PHONE_NO, "Exit", ts))
-
-    # Update Status table
     cur.execute("""
     REPLACE INTO Status VALUES (?,?,?)
     """, (
         enroll,
-        "OUTSIDE" if action.upper() == "EXIT" else "INSIDE",
+        "OUTSIDE" if action == "EXIT" else "INSIDE",
         ts
     ))
 
@@ -2502,51 +2437,39 @@ def mark(action, enroll):
     )
 
 
+
+
 # ---------------- ROUTES ----------------
 @app.route("/add_student")
 def add_student():
     return render_template("add_new_student.html")
-# ---------------- DASHBOARD ----------------
 
 
 @app.route("/dashboard")
 def dashboard():
 
-    # calendar & search input
+    # 🔹 1. calendar & search input घ्या
     selected_date = request.args.get("date")
     search = request.args.get("search", "").strip()
 
     con = sqlite3.connect(DB_PATH)
     con.row_factory = sqlite3.Row
-    cursor = con.cursor()
 
-    # base query
+    # 🔹 2. base query
     query = """
-    SELECT 
-        g.id,
-        g.enrollment,
-        g.name,
-        g.department,
-        g.year,
-        g.phone,
-        COALESCE(g.Entry_action,'-') AS Entry_action,
-        COALESCE(g.Exit_action,'-') AS Exit_action,
-        g.timestamp,
-        s.current_status
+    SELECT g.*, s.current_status
     FROM GateLogs g
-    LEFT JOIN Status s
-        ON g.enrollment = s.enrollment
+    LEFT JOIN Status s ON g.enrollment = s.enrollment
     WHERE 1=1
     """
-
     params = []
 
-    # date filter
+    # 🔹 3. date filter (calendar)
     if selected_date:
-        query += " AND DATE(g.timestamp) = DATE(?)"
-        params.append(selected_date)
+        query += " AND g.timestamp LIKE ?"
+        params.append(f"{selected_date}%")
 
-    # search filter
+    # 🔹 4. student search (name / enrollment / phone)
     if search:
         query += """
         AND (
@@ -2563,8 +2486,7 @@ def dashboard():
 
     query += " ORDER BY g.id DESC"
 
-    logs = cursor.execute(query, params).fetchall()
-
+    logs = con.execute(query, params).fetchall()
     con.close()
 
     return render_template(
@@ -2574,35 +2496,30 @@ def dashboard():
     )
 
 
-# ---------------- STUDENT INFO MODAL ----------------
 
 @app.route("/student_info/<enroll>")
 def student_info(enroll):
-
     try:
-
         con = sqlite3.connect(DB_PATH)
         con.row_factory = sqlite3.Row
         cursor = con.cursor()
 
         cursor.execute("""
-            SELECT *
+            SELECT * 
             FROM GateLogs
             WHERE enrollment = ?
             ORDER BY id DESC
             LIMIT 1
         """, (enroll,))
-
         row = cursor.fetchone()
         con.close()
 
         if not row:
             return jsonify({"error": "Student not found"}), 404
 
-        # student image
+        # Image path (static/images/<enroll>_1.jpg)
         import os
         img_path = f"/static/images/{enroll}_1.jpg"
-
         if not os.path.exists(f".{img_path}"):
             img_path = "/static/default.jpg"
 
@@ -2612,17 +2529,14 @@ def student_info(enroll):
             "department": row["department"],
             "year": row["year"],
             "phone": row["phone"],
-            "Entry_action": row["Entry_action"] or "-",
-            "Exit_action": row["Exit_action"] or "-",
-            "timestamp": row["timestamp"],
+            "action": row["action"],
             "image": img_path
         })
 
     except Exception as e:
-
         print("🔥 STUDENT INFO ERROR:", e)
-
         return jsonify({"error": str(e)}), 500
+
 # ---------------- PATHS ----------------
 STUDENT_IMAGE_DIR = "static/images"
 # DB_PATH = "students.db"

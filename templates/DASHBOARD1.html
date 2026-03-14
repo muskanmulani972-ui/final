@@ -105,7 +105,6 @@ a{
 </head>
 <body>
 
-<!-- 🔹 TOP BAR -->
 <div class="top-bar">
     <a href="/" class="back-btn">⬅ Back to Home</a>
     <h2>📊 Admin Dashboard</h2>
@@ -117,7 +116,8 @@ a{
 
     <label style="margin-left:20px;"><b>Search Student:</b></label>
     <input type="text" name="search" placeholder="Enter Name / Enrollment / Phone"
-           value="{{ request.args.get('search','') }}" style="width:420px; height:38px; font-size:16px; padding:6px;">
+           value="{{ request.args.get('search','') }}" 
+           style="width:420px; height:38px; font-size:16px; padding:6px;">
 
     <button type="submit">Search</button>
     <a href="/dashboard" style="margin-left:15px;">Clear</a>
@@ -130,7 +130,8 @@ a{
     <th>Name</th>
     <th>Dept</th>
     <th>Year</th>
-    <th>Action</th>
+    <th>Entry Action</th>
+    <th>Exit Action</th>
     <th>Time</th>
     <th>Status</th>
     <th>View Info</th>
@@ -141,9 +142,29 @@ a{
     <td>{{l.name}}</td>
     <td>{{l.department}}</td>
     <td>{{l.year}}</td>
-    <td>{{l.action}}</td>
-    <td>{{l.timestamp}}</td>
+
+    <td>
+        {{ l.Entry_action or '-' }}
+        {% if l.entry_time %}
+        <br>
+        <small style="color:gray">{{ l.entry_time }}</small>
+        {% endif %}
+    </td>
+
+    <td>
+        {{ l.Exit_action or '-' }}
+        {% if l.exit_time %}
+        <br>
+        <small style="color:gray">{{ l.exit_time }}</small>
+        {% endif %}
+    </td>
+
+    <td>
+        {{ l.entry_time or l.exit_time or '-' }}
+    </td>
+
     <td>{{l.current_status}}</td>
+
     <td>
         <button onclick="viewInfo('{{ l.enrollment }}')">
             View
@@ -153,44 +174,50 @@ a{
 {% endfor %}
 </table>
 
-<!-- 🔹 STUDENT INFO MODAL -->
+
 <div id="studentModal">
     <div class="modal-content">
         <span id="closeModal">&times;</span>
         <img id="studentImg" src="/static/default.jpg">
         <h3 id="studentName">Student Name</h3>
+
         <p><b>Enrollment:</b> <span id="studentEnroll"></span></p>
         <p><b>Department:</b> <span id="studentDept"></span></p>
         <p><b>Year:</b> <span id="studentYear"></span></p>
         <p><b>Phone:</b> <span id="studentPhone"></span></p>
-        <p><b>Action:</b> <span id="studentAction"></span></p>
+        <p><b>Entry Action:</b> <span id="studentEntryAction"></span></p>
+        <p><b>Exit Action:</b> <span id="studentExitAction"></span></p>
     </div>
 </div>
 
-
 <script>
+
 function viewInfo(enroll) {
+
     fetch(`/student_info/${enroll}`)
     .then(res => res.json())
     .then(data => {
+
         document.getElementById('studentName').innerText = data.name;
         document.getElementById('studentEnroll').innerText = data.enrollment;
         document.getElementById('studentDept').innerText = data.department;
         document.getElementById('studentYear').innerText = data.year;
         document.getElementById('studentPhone').innerText = data.phone;
-        document.getElementById('studentAction').innerText = data.action;
 
-        // Load student image if exists
+        document.getElementById('studentEntryAction').innerText = data.Entry_action || "-";
+        document.getElementById('studentExitAction').innerText = data.Exit_action || "-";
+
         document.getElementById('studentImg').src = data.image || '/static/default.jpg';
+
         document.getElementById('studentModal').style.display = "flex";
     });
+
 }
 
-
-// Close modal
 document.getElementById('closeModal').onclick = () => {
     document.getElementById('studentModal').style.display = "none";
 };
+
 </script>
 
 </body>
