@@ -1861,7 +1861,6 @@ def check_status():
 #============================================================
 # COLLEGE ENTRY EXIT SYSTEM (HIGH ACCURACY – FACE RECOGNITION)
 # ============================================================
-
 import threading
 import time
 import pandas as pd
@@ -1870,10 +1869,20 @@ import base64
 import cv2
 import numpy as np
 import sqlite3
-from deepface import DeepFace
 from flask import Flask, request, jsonify, render_template
 from datetime import datetime
 
+# ---------------- Lazy load DeepFace ----------------
+from deepface import DeepFace
+
+model = None
+def get_model():
+    global model
+    if model is None:
+        print("🔄 Loading DeepFace Facenet model...")
+        model = DeepFace.build_model("Facenet")  # Only load once, first request
+        print("✅ Model loaded")
+    return model
 
 # ---------------- PATHS ----------------
 DATA_PATH = "Dataset.csv.xlsx"
@@ -1929,15 +1938,18 @@ df.columns = [c.strip().upper().replace(" ", "_") for c in df.columns]
 # ---------------- FACE ENCODING ----------------
 def get_face_encoding(img):
     try:
+        model_instance = get_model()  # Lazy load model
         embedding = DeepFace.represent(
-            img_path=img,
+            img_path = img,
             model_name="Facenet",
+            model=model_instance,
             enforce_detection=True
         )[0]["embedding"]
 
         return np.array(embedding)
 
-    except:
+    except Exception as e:
+        print("⚠️ Face encoding error:", e)
         return None
 
 # ---------------- LOAD STUDENT FACES ----------------
@@ -1954,14 +1966,11 @@ def load_known_faces():
 
         for img_name in os.listdir(IMAGE_DIR):
             if img_name.startswith(enroll):
-
                 img = cv2.imread(os.path.join(IMAGE_DIR, img_name))
-
                 if img is None:
                     continue
 
                 enc = get_face_encoding(img)
-
                 if enc is not None:
                     known_encodings.append(enc)
                     known_enrollments.append(enroll)
@@ -1980,9 +1989,7 @@ def match_face_live(live_encoding, threshold=0.6):
     best_distance = 999
 
     for i, known_enc in enumerate(known_encodings):
-
         dist = np.linalg.norm(known_enc - live_encoding)
-
         if dist < best_distance:
             best_distance = dist
             best_match = known_enrollments[i]
@@ -1992,7 +1999,9 @@ def match_face_live(live_encoding, threshold=0.6):
 
     return None
 
-# ---------------- ROUTES ----------------
+# ---------------- FLASK APP ----------------
+app = Flask(__name__)
+
 @app.route("/entryexit")
 def entryexit():
     return render_template("verify.html")
@@ -2111,12 +2120,7 @@ def dashboard():
             OR g.phone LIKE ?
         )
         """
-
-        params.extend([
-            f"%{search}%",
-            f"%{search}%",
-            f"%{search}%"
-        ])
+        params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
 
     query += " ORDER BY g.id DESC"
 
@@ -2141,7 +2145,6 @@ def student_info(enroll):
     )
 
     student = cursor.fetchone()
-
     conn.close()
 
     if not student:
@@ -2151,7 +2154,6 @@ def student_info(enroll):
 
     image_folder = f"static/dataset/{enroll}"
     images = []
-
     if os.path.exists(image_folder):
         images = os.listdir(image_folder)
 
@@ -2166,9 +2168,7 @@ def student_info(enroll):
 
 @app.route("/save_student_camera", methods=["POST"])
 def save_student_camera():
-
     try:
-
         os.makedirs(STUDENT_IMAGE_DIR, exist_ok=True)
 
         data = request.json
@@ -2192,13 +2192,9 @@ def save_student_camera():
         encodings_list = []
 
         for i, img_data in enumerate(images):
-
             header, encoded = img_data.split(",", 1)
-
             img_bytes = base64.b64decode(encoded)
-
             img_array = np.frombuffer(img_bytes, np.uint8)
-
             img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
 
             if img is None:
@@ -2208,15 +2204,11 @@ def save_student_camera():
             cv2.imwrite(img_path, img)
 
             enc = get_face_encoding(img)
-
             if enc is not None:
                 encodings_list.append(enc)
 
         if len(encodings_list) < 2:
-            return jsonify({
-                "status": "error",
-                "msg": "Face not clear. Please capture again"
-            })
+            return jsonify({"status": "error","msg": "Face not clear. Please capture again"})
 
         avg_encoding = np.mean(encodings_list, axis=0)
 
@@ -2232,26 +2224,15 @@ def save_student_camera():
         conn.commit()
         conn.close()
 
-        np.save(
-            os.path.join(student_folder, "encoding.npy"),
-            avg_encoding
-        )
+        np.save(os.path.join(student_folder, "encoding.npy"), avg_encoding)
 
         load_known_faces()
 
-        return jsonify({
-            "status":"success",
-            "msg":"✅ Student saved successfully"
-        })
+        return jsonify({"status":"success","msg":"✅ Student saved successfully"})
 
     except Exception as e:
-
         print("🔥 SAVE STUDENT ERROR:", e)
-
-        return jsonify({
-            "status":"error",
-            "msg":"Server error while saving student"
-        })
+        return jsonify({"status":"error","msg":"Server error while saving student"})
 
 # ---------------- RUN ----------------
 if __name__ == "__main__":
